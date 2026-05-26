@@ -1,6 +1,7 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
 import type { WindowLevel, MeasurementTool, Measurement } from './MedicalImageViewer';
 import { Slider } from './ui/slider';
+import { getSnapPoints, findNearestSnap, drawSnapIndicator, SnapPoint } from './utils/snapPoints';
 
 interface ViewportProps {
   imageData: Uint8Array;
@@ -41,6 +42,8 @@ export function Viewport({
   const draggingPointRef = useRef<{ measurementId: string; pointIndex: number } | null>(null);
   const measurementsRef = useRef(measurements);
   useEffect(() => { measurementsRef.current = measurements; }, [measurements]);
+  const [activeSnap, setActiveSnap] = useState<SnapPoint | null>(null);
+  const activeSnapRef = useRef<SnapPoint | null>(null);
 
   useEffect(() => {
     if (!windowLevel) return;
@@ -793,6 +796,10 @@ export function Viewport({
         }
     });
 
+    // Draw snap indicator
+    if (activeSnap) {
+      drawSnapIndicator(ctx, activeSnap);
+    }
     // Draw current drawing
     if (isDrawing && drawingPoints.length > 0) {
       ctx.strokeStyle = '#FFD700';
@@ -813,7 +820,7 @@ export function Viewport({
         });
       }
     }
-  }, [measurements, currentSlice, isDrawing, drawingPoints, activeTool, cursorPos, showCrosshair, selectedLineId]);
+  }, [measurements, currentSlice, isDrawing, drawingPoints, activeTool, cursorPos, showCrosshair, selectedLineId, activeSnap]);
 
   // Calculate measurement value
   const calculateMeasurementValue = (type: MeasurementTool, points: { x: number; y: number }[]): string => {
@@ -833,6 +840,11 @@ export function Viewport({
     }
     return '';
   };
+
+  const snapCoord = (x: number, y: number) => ({
+    x: activeSnapRef.current?.x ?? x,
+    y: activeSnapRef.current?.y ?? y,
+  });
 
   // Mouse handlers
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -950,6 +962,12 @@ setSelectedLineId(null);
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
+    if (activeTool === 'distance' || activeTool === 'line' || activeTool === 'angle') {
+      const snap = findNearestSnap(x, y, getSnapPoints(measurementsRef.current));
+      activeSnapRef.current = snap;
+      setActiveSnap(snap);
+    }
+
     if (draggingPointRef.current) {
   const m = measurementsRef.current.find(m => m.id === draggingPointRef.current!.measurementId);
   if (m?.type === 'perpendicular' && m.baseLineId) {
@@ -1028,7 +1046,8 @@ setSelectedLineId(null);
       setPanSrc({ x: newX, y: newY });
     } else if (isDrawing) {
       if (activeTool === 'distance' || activeTool === 'line') {
-        setDrawingPoints([drawingPoints[0], { x, y }]);
+        const sc = snapCoord(x, y);
+        setDrawingPoints([drawingPoints[0], { x: sc.x, y: sc.y }]);
       }
     }
     setCursorPos({ x, y });
@@ -1108,7 +1127,8 @@ setSelectedLineId(null);
         setIsDrawing(true);
         setDrawingPoints([{ x, y }]);
       } else {
-        const points = [...drawingPoints, { x, y }];
+        const sc = snapCoord(x, y);
+        const points = [...drawingPoints, { x: sc.x, y: sc.y }];
         const value = calculateMeasurementValue('distance', points);
         onMeasurementAdd({
           id: Date.now().toString(),
@@ -1128,7 +1148,8 @@ setSelectedLineId(null);
       } else if (drawingPoints.length === 1) {
         setDrawingPoints(prev => [...prev, { x, y }]);
       } else if (drawingPoints.length === 2) {
-        const points = [...drawingPoints, { x, y }];
+        const sc = snapCoord(x, y);
+        const points = [...drawingPoints, { x: sc.x, y: sc.y }];
         const value = calculateMeasurementValue('angle', points);
         onMeasurementAdd({
           id: Date.now().toString(),
@@ -1284,7 +1305,9 @@ setSelectedLineId(null);
                 ref={overlayCanvasRef}
                 className="absolute inset-0 w-full h-full"
                 style={{
-                  cursor: isAxial && isZoomMode
+                  cursor: activeSnap
+                    ? 'cell'
+                    : isAxial && isZoomMode
                     ? 'zoom-in'
                     : isAxial && isRotateMode
                       ? 'ew-resize'
